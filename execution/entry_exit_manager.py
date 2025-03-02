@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 
 from config.settings import REDIS_CONFIG, POSTGRES_CONFIG, STRATEGY_WEIGHTS
 from config.logging_config import configure_logging
+from execution.risk_manager import RiskManager
 
 
 class EntryExitManager:
@@ -817,22 +818,28 @@ class EntryExitManager:
                 if entry_signal:
                     # 캔들 마감 확인
                     if self.confirm_signal_after_candle_close(entry_signal):
+                        # 리스크 관리자 인스턴스 생성 (실제로는 더 효율적인 방법으로 관리)
+                        risk_manager = RiskManager(self.symbol)
+
+                        # 리스크 관리자를 통해 최종 TP/SL 결정
+                        tp_sl_result = risk_manager.finalize_tp_sl(entry_signal, market_condition)
+
                         # 진입 결정
                         result.update({
                             'action': 'entry',
                             'direction': entry_signal.get('direction', 'none'),
                             'price': entry_signal.get('entry_price', self.get_current_price()),
                             'entry_signal': entry_signal,
-                            'stop_loss': entry_signal.get('stop_loss_level', 0),
-                            'take_profit_levels': entry_signal.get('take_profit_levels', [])
+                            'stop_loss': tp_sl_result['stop_loss'],
+                            'take_profit_levels': tp_sl_result['take_profit_levels']
                         })
 
                         # 활성 포지션 설정
                         self.active_position = {
                             'direction': entry_signal.get('direction', 'none'),
                             'entry_price': result['price'],
-                            'stop_loss': entry_signal.get('stop_loss_level', 0),
-                            'take_profit_levels': entry_signal.get('take_profit_levels', []),
+                            'stop_loss': tp_sl_result['stop_loss'],
+                            'take_profit_levels': tp_sl_result['take_profit_levels'],
                             'timestamp_ms': int(time.time() * 1000),
                             'strategy_id': entry_signal.get('strategy_id', 'unknown'),
                             'timeframe': entry_signal.get('timeframe', 'unknown')
@@ -842,7 +849,8 @@ class EntryExitManager:
                             f"포지션 진입 결정: "
                             f"{result['direction']}, "
                             f"가격={result['price']}, "
-                            f"SL={result['stop_loss']}"
+                            f"SL={result['stop_loss']}, "
+                            f"TP 조정 이유={tp_sl_result['adjusted_reason']}"
                         )
 
         except Exception as e:

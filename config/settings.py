@@ -124,5 +124,14 @@ STRATEGY_WEIGHTS = {
     "range": 0.15
 }
 
+# 초기 실전 운영을 위한 리스크 제한
+INITIAL_DEPLOYMENT = {
+    "max_active_positions": 1,     # 최대 동시 포지션 수
+    "max_position_size_usd": 100,  # 최대 포지션 크기 (USD)
+    "max_daily_loss": 50,          # 일일 최대 손실 금액 (USD)
+    "emergency_stop_loss_pct": 5,  # 비상 정지 손실 비율 (%)
+    "trade_volume_limit": 500      # 일일 거래량 제한 (USD)
+}
+
 # 시스템 상태 및 성능 모니터링 설정
 MONITOR_HEARTBEAT_INTERVAL = 300  # 시스템 상태 확인 주기 (5분)

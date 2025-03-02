@@ -1349,6 +1349,125 @@ class RiskManager:
             self.redis_client.close()
             self.logger.info("Redis 연결 종료됨")
 
+    def finalize_tp_sl(
+            self,
+            signal: Dict[str, Any],
+            market_condition: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        전략에서 제안된 TP/SL 값을 평가하고 최종 값을 결정합니다.
+
+        Args:
+            signal: 전략에서 생성된 신호
+            market_condition: 현재 시장 상황
+
+        Returns:
+            Dict: 최종 TP/SL 값이 포함된 결과
+        """
+        self.logger.info(f"TP/SL 값 최종화 중: {signal.get('direction')}, 전략: {signal.get('strategy_id', '미지정')}")
+
+        # 기본 결과 구조
+        result = {
+            "stop_loss": 0.0,
+            "take_profit_levels": [],
+            "tp_percentages": [],
+            "adjusted_reason": ""
+        }
+
+        try:
+            # 전략 제안 값 추출
+            entry_price = signal.get("entry_price", 0.0)
+            suggested_sl = signal.get("suggested_stop_loss", 0.0)
+            suggested_tp_levels = signal.get("suggested_take_profit_levels", [])
+            direction = signal.get("direction", "none")
+            atr_value = signal.get("atr_value", 0.0)
+
+            if entry_price <= 0 or suggested_sl <= 0 or not suggested_tp_levels:
+                self.logger.warning("유효한 진입/TP/SL 값이 없습니다")
+                return result
+
+            # 1. 손절 검증 및 조정
+            final_sl = suggested_sl
+            sl_adjustment_reason = []
+
+            # 최소 스탑 거리 확인
+            min_sl_distance = atr_value * 0.5  # 최소 ATR의 절반
+            actual_sl_distance = abs(entry_price - final_sl)
+
+            if actual_sl_distance < min_sl_distance:
+                # 스탑이 너무 가까우면 조정
+                if direction == "long":
+                    final_sl = entry_price - min_sl_distance
+                else:
+                    final_sl = entry_price + min_sl_distance
+                sl_adjustment_reason.append(f"최소 스탑 거리 조정 (ATR의 0.5배)")
+
+            # 최대 스탑 거리 확인
+            max_sl_distance = atr_value * 3.0  # 최대 ATR의 3배
+
+            if actual_sl_distance > max_sl_distance:
+                # 스탑이 너무 멀면 조정
+                if direction == "long":
+                    final_sl = entry_price - max_sl_distance
+                else:
+                    final_sl = entry_price + max_sl_distance
+                sl_adjustment_reason.append(f"최대 스탑 거리 조정 (ATR의 3배)")
+
+            # 2. 이익실현 검증 및 조정
+            final_tp_levels = []
+            final_tp_percentages = []
+
+            for i, (tp_price, tp_percentage) in enumerate(suggested_tp_levels):
+                # 최소 R:R 검증
+                risk = abs(entry_price - final_sl)
+                reward = abs(tp_price - entry_price)
+                rr_ratio = reward / risk if risk > 0 else 0
+
+                # 첫 번째 TP의 R:R이 너무 낮으면 조정
+                if i == 0 and rr_ratio < self.config["min_risk_reward_ratio"]:
+                    if direction == "long":
+                        tp_price = entry_price + (risk * self.config["min_risk_reward_ratio"])
+                    else:
+                        tp_price = entry_price - (risk * self.config["min_risk_reward_ratio"])
+                    sl_adjustment_reason.append(f"첫 번째 TP의 R:R 비율 조정 (최소 {self.config['min_risk_reward_ratio']})")
+
+                final_tp_levels.append(tp_price)
+                final_tp_percentages.append(tp_percentage)
+
+            # 시장 상황에 따른 추가 조정
+            if market_condition:
+                volatility_level = market_condition.get("volatility", {}).get("level", "medium")
+
+                # 고변동성 시장에서는 TP를 더 멀리, SL을 더 가깝게
+                if volatility_level in ["high", "very_high"]:
+                    for i in range(len(final_tp_levels)):
+                        if direction == "long":
+                            final_tp_levels[i] *= 1.1  # 10% 증가
+                        else:
+                            final_tp_levels[i] *= 0.9  # 10% 감소
+
+                    sl_adjustment_reason.append(f"고변동성 시장 조정")
+
+            # 최종 결과 저장
+            result.update({
+                "stop_loss": final_sl,
+                "take_profit_levels": final_tp_levels,
+                "tp_percentages": final_tp_percentages,
+                "adjusted_reason": ", ".join(sl_adjustment_reason) if sl_adjustment_reason else "제안값 수용"
+            })
+
+            self.logger.info(
+                f"TP/SL 최종화 완료: "
+                f"SL={final_sl:.2f}, "
+                f"TP={[f'{tp:.2f}' for tp in final_tp_levels]}, "
+                f"조정 이유: {result['adjusted_reason']}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"TP/SL 최종화 중 오류 발생: {e}")
+
+        return result
+
 
 # 직접 실행 시 관리자 시작
 if __name__ == "__main__":

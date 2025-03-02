@@ -1679,6 +1679,18 @@ class PositionManager:
         except Exception as e:
             self.logger.error(f"포지션 관리자 종료 중 오류 발생: {e}")
 
+    def enable_paper_trading(self):
+        """페이퍼 트레이딩 모드 활성화"""
+        self.config["simulated_mode"] = True
+        self.logger.info("페이퍼 트레이딩 모드 활성화됨")
+        return True
+
+    def disable_paper_trading(self):
+        """페이퍼 트레이딩 모드 비활성화"""
+        self.logger.warning("실제 거래 모드로 전환 - 실제 자금이 사용됩니다!")
+        self.config["simulated_mode"] = False
+        return True
+
 
 # 직접 실행 시 포지션 관리자 시작
 if __name__ == "__main__":
