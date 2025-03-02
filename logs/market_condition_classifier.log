@@ -1,0 +1,20 @@
+2025-03-02 22:00:16,111 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:00:16,111 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:00:16,125 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:00:16,125 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:00:16,139 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:00:16,139 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:00:16,153 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:00:16,153 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:00:16,160 [INFO] market_condition_classifier: 시장 상황 분류 시작
+2025-03-02 22:00:16,161 [INFO] market_condition_classifier: 시장 상황 분류 완료: trending_up/breakout, 국면: advancing, 신뢰도: 59.10%
+2025-03-02 22:00:16,168 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:00:16,168 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:03:57,385 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:03:57,385 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:03:57,447 [INFO] market_condition_classifier: 시장 상황 분류 시작
+2025-03-02 22:03:57,447 [INFO] market_condition_classifier: 시장 상황 분류 완료: ranging/unknown, 국면: unknown, 신뢰도: 16.67%
+2025-03-02 22:09:09,887 [INFO] market_condition_classifier: 시장 상황 테이블 초기화됨
+2025-03-02 22:09:09,887 [INFO] market_condition_classifier: MarketConditionClassifier 초기화됨
+2025-03-02 22:09:09,957 [INFO] market_condition_classifier: 시장 상황 분류 시작
+2025-03-02 22:09:09,957 [INFO] market_condition_classifier: 시장 상황 분류 완료: ranging/unknown, 국면: unknown, 신뢰도: 16.67%
