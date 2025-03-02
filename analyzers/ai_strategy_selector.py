@@ -468,6 +468,13 @@ class AIStrategySelector:
             for strategy_id, info in self.supported_strategies.items()
         }
 
+        # 전략 우선순위 가중치 가져오기
+        priority_weights = self.get_strategy_priority(market_data)
+
+        # 기존 가중치에 우선순위 가중치 적용
+        for strategy_id, strategy_info in strategy_scores.items():
+            strategy_scores[strategy_id]["score"] *= priority_weights.get(strategy_id, 1.0)
+
         # 시장 상황에 따른 가중치 조정
         if market_data:
             primary_condition = market_data.get('primary_condition', 'unknown')
@@ -587,6 +594,63 @@ class AIStrategySelector:
             "avg_trade_pct": condition_performance["avg_trade"] + random.uniform(-0.3, 0.3),
             "sample_size": random.randint(30, 100)
         }
+
+    def get_strategy_priority(self, market_condition: Dict[str, Any]) -> Dict[str, float]:
+        """
+        현재 시장 상황에 따라 전략 우선순위를 결정합니다.
+
+        Args:
+            market_condition: 시장 상황 데이터
+
+        Returns:
+            Dict[str, float]: 전략별 우선순위 가중치
+        """
+        # 기본 우선순위 가중치
+        priority_weights = {
+            "trend_following": 1.0,
+            "reversal": 1.0,
+            "breakout": 1.0,
+            "range": 1.0
+        }
+
+        # 시장 상황에 따른 우선순위 조정
+        primary_condition = market_condition.get('primary_condition', 'unknown')
+        secondary_condition = market_condition.get('secondary_condition', 'unknown')
+
+        # 추세 시장에서는 추세추종, 돌파 전략 우선
+        if primary_condition in ['trending_up', 'trending_down']:
+            priority_weights["trend_following"] = 1.4
+            priority_weights["breakout"] = 1.2
+            priority_weights["reversal"] = 0.8
+            priority_weights["range"] = 0.6
+
+        # 횡보 시장에서는 레인지, 반전 전략 우선
+        elif primary_condition in ['ranging', 'consolidation']:
+            priority_weights["range"] = 1.4
+            priority_weights["reversal"] = 1.2
+            priority_weights["breakout"] = 0.9
+            priority_weights["trend_following"] = 0.7
+
+        # 고변동성 시장에서는 돌파, 반전 전략 우선
+        elif primary_condition in ['high_volatility', 'very_high_volatility']:
+            priority_weights["breakout"] = 1.4
+            priority_weights["reversal"] = 1.2
+            priority_weights["trend_following"] = 0.9
+            priority_weights["range"] = 0.6
+
+        # 과매수/과매도 상태에서는 반전 전략 우선
+        if secondary_condition in ['overbought', 'oversold', 'euphoria', 'capitulation']:
+            priority_weights["reversal"] *= 1.3
+
+        # 누적/배분 구간에서는 해당 전략 강화
+        if secondary_condition == 'accumulation':
+            priority_weights["range"] *= 1.2
+            priority_weights["breakout"] *= 1.1
+        elif secondary_condition == 'distribution':
+            priority_weights["reversal"] *= 1.1
+            priority_weights["range"] *= 1.0
+
+        return priority_weights
 
     async def get_ai_strategy_recommendation(
             self,
