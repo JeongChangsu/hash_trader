@@ -7,13 +7,15 @@ HashTrader 데이터 수집 스케줄러
 수집 누락 감지 및 복구 기능도 포함되어 있습니다.
 """
 
+import os
+import sys
+import time
+import math
+import pytz
 import asyncio
 import logging
-import time
-import os
 import signal
-import sys
-import pytz
+
 from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Any, Optional, Callable, Tuple
 
@@ -27,11 +29,11 @@ from config.settings import (
 )
 from config.logging_config import configure_logging
 
+from data_collectors.backfill_ohlcv import backfill_ohlcv
 from data_collectors.market_data_collector import MarketDataCollector
 from data_collectors.fear_greed_collector import FearGreedCollector
 from data_collectors.liquidation_analyzer import LiquidationAnalyzer
 from data_collectors.onchain_data_collector import OnChainDataCollector
-from data_collectors.backfill_ohlcv import backfill_ohlcv
 
 # 로깅 설정
 logger = configure_logging("scheduler")
@@ -52,6 +54,9 @@ class DataCollectorScheduler:
         self.tasks = {}
         self.collectors = {}
         self.last_runs = {}
+
+        # 로거 참조 추가
+        self.logger = logger  # 이미 파일 상단에서 로거를 가져오므로 여기서 참조만 저장
 
         # 실행 중인 태스크 추적
         self.running_tasks = {}
@@ -275,13 +280,22 @@ class DataCollectorScheduler:
         """
 
         async def wrapper():
-            self.running_tasks[task_name] = asyncio.create_task(coroutine_func())
+            task_start_time = datetime.now(KST)
+            self.logger.info(f"{task_name} 작업 시작 (KST: {task_start_time.strftime('%Y-%m-%d %H:%M:%S')})")
+
             try:
+                self.running_tasks[task_name] = asyncio.create_task(coroutine_func())
                 await self.running_tasks[task_name]
+                self.logger.info(f"{task_name} 작업 성공적으로 완료됨")
+            except asyncio.CancelledError:
+                self.logger.warning(f"{task_name} 작업이 취소됨")
+                raise
             except Exception as e:
-                logger.error(f"{task_name} 태스크 실행 중 예외 발생: {e}")
+                self.logger.error(f"{task_name} 작업 실행 중 예외 발생: {e}", exc_info=True)
             finally:
                 if task_name in self.running_tasks:
+                    elapsed = (datetime.now(KST) - task_start_time).total_seconds()
+                    self.logger.info(f"{task_name} 작업 종료 (소요 시간: {elapsed:.2f}초)")
                     del self.running_tasks[task_name]
 
         # 정각에 맞춰 첫 실행 시간 조정

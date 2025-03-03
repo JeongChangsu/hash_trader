@@ -377,7 +377,7 @@ if [ "$SCHEDULER_ONLY" = true ] || [ "$RESET" = true ] || [ "$BACKFILL" = true ]
 
     echo "스케줄러가 PID $SCHEDULER_PID로 백그라운드에서 시작되었습니다" | tee -a "$LOG_FILE"
     echo "로그를 보려면 다음 명령을 사용하세요: tail -f $LOG_FILE" | tee -a "$LOG_FILE"
-    echo "스케줄러를 종료하려면 다음 명령을 사용하세요: kill $SCHEDULER_PID" | tee -a "$LOG_FILE"
+    echo "스케줄러를 종료하려면 다음 명령을 사용하세요: kill -9 $SCHEDULER_PID" | tee -a "$LOG_FILE"
 
     # PID 저장
     echo "$SCHEDULER_PID" > "$LOG_DIR/scheduler.pid"

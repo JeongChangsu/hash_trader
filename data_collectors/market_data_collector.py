@@ -233,7 +233,7 @@ class MarketDataCollector:
 
                 # 로깅 시 한국 시간 표시
                 latest_candle = df.iloc[-1]
-                utc_time = datetime.fromtimestamp(latest_candle['timestamp'].timestamp())
+                utc_time = datetime.fromtimestamp(latest_candle['timestamp'] / 1000)
                 kst_time = utc_time.replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
 
                 self.logger.info(
@@ -293,7 +293,14 @@ class MarketDataCollector:
                 ohlcv,
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
             )
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            try:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            except AttributeError:
+                # numpy.float64를 정수로 변환 후 datetime으로 변환
+                df['timestamp'] = pd.to_datetime(df['timestamp'].astype(np.int64), unit='ms')
+            except Exception as e:
+                # 혹시 모를 다른 예외 처리
+                df['timestamp'] = pd.to_datetime(df['timestamp'].apply(lambda x: int(x)), unit='ms')
 
             # DB에 저장
             await self.save_ohlcv_to_postgres(symbol, timeframe, df)
