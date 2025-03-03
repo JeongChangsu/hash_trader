@@ -62,12 +62,19 @@ CLAUDE_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GPT_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # 데이터 수집 주기 설정 (초 단위)
-MARKET_DATA_INTERVAL = 60  # 1분
-ORDERBOOK_INTERVAL = 15  # 15초
-VOLUME_PROFILE_INTERVAL = 3600  # 1시간
-LIQUIDATION_HEATMAP_INTERVAL = 86400  # 24시간
-FEAR_GREED_INTERVAL = 86400  # 24시간
-ONCHAIN_DATA_INTERVAL = 86400  # 24시간
+# 초고수익률 트레이더를 위한 최적화된 주기 설정
+MARKET_DATA_INTERVAL = 60  # 1분 (캔들 형성 주기와 일치시키기 위해 유지)
+ORDERBOOK_INTERVAL = 5  # 5초 (더 빠른 시장 깊이 분석)
+VOLUME_PROFILE_INTERVAL = 1800  # 30분 (유동성 흐름 더 자주 분석)
+LIQUIDATION_HEATMAP_INTERVAL = 14400  # 4시간 (레버리지 포지션 분포 더 자주 확인)
+FEAR_GREED_INTERVAL = 43200  # 12시간 (하루 두 번 시장 감정 확인)
+ONCHAIN_DATA_INTERVAL = 21600  # 6시간 (온체인 흐름 더 자주 분석)
+
+# 추가 스케줄링 설정
+ORDERBOOK_DEPTH_ANALYSIS_INTERVAL = 300  # 5분 (주요 지지/저항 레벨 분석)
+SMART_MONEY_FLOW_INTERVAL = 3600  # 1시간 (기관 자금 흐름 분석)
+CORRELATION_ANALYSIS_INTERVAL = 7200  # 2시간 (자산 간 상관관계 분석)
+VOLATILITY_MONITOR_INTERVAL = 900  # 15분 (변동성 모니터링)
 
 # 전략 설정
 DEFAULT_RISK_PER_TRADE = 0.01  # 거래당 계정 자본의 1%
@@ -125,11 +132,11 @@ STRATEGY_WEIGHTS = {
 
 # 초기 실전 운영을 위한 리스크 제한
 INITIAL_DEPLOYMENT = {
-    "max_active_positions": 1,     # 최대 동시 포지션 수
+    "max_active_positions": 1,  # 최대 동시 포지션 수
     "max_position_size_usd": 100,  # 최대 포지션 크기 (USD)
-    "max_daily_loss": 50,          # 일일 최대 손실 금액 (USD)
+    "max_daily_loss": 50,  # 일일 최대 손실 금액 (USD)
     "emergency_stop_loss_pct": 5,  # 비상 정지 손실 비율 (%)
-    "trade_volume_limit": 500      # 일일 거래량 제한 (USD)
+    "trade_volume_limit": 500  # 일일 거래량 제한 (USD)
 }
 
 # 시스템 상태 및 성능 모니터링 설정

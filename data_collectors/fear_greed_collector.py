@@ -7,18 +7,21 @@
 수집된 데이터는 Redis 및 PostgreSQL에 저장됩니다.
 """
 
-import requests
-import redis
-import psycopg2
 import json
+import pytz
+import redis
 import logging
+import requests
+import psycopg2
+
 import pandas as pd
 import numpy as np
+
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 
-from config.settings import REDIS_CONFIG, POSTGRES_CONFIG
 from config.logging_config import configure_logging
+from config.settings import REDIS_CONFIG, POSTGRES_CONFIG
 
 
 class FearGreedCollector:
@@ -39,13 +42,13 @@ class FearGreedCollector:
         # API URL
         self.api_url = "https://api.alternative.me/fng/"
 
-        # 감정 카테고리 매핑
-        self.sentiment_categories = {
-            "Extreme Fear": {"min": 0, "max": 24, "signal": "potential_buy"},
-            "Fear": {"min": 25, "max": 49, "signal": "cautious_buy"},
-            "Neutral": {"min": 50, "max": 74, "signal": "neutral"},
-            "Greed": {"min": 75, "max": 89, "signal": "cautious_sell"},
-            "Extreme Greed": {"min": 90, "max": 100, "signal": "potential_sell"}
+        # 감정 카테고리별 매매 신호
+        self.sentiment_signals = {
+            "Extreme Fear": "potential_buy",
+            "Fear": "cautious_buy",
+            "Neutral": "neutral",
+            "Greed": "cautious_sell",
+            "Extreme Greed": "potential_sell"
         }
 
         self.initialize_db()
@@ -57,11 +60,12 @@ class FearGreedCollector:
         try:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fear_greed_index (
-                    timestamp_ms BIGINT PRIMARY KEY,
+                    id SERIAL,
+                    timestamp_ms BIGINT NOT NULL,
                     fear_greed_index INTEGER,
                     sentiment_category VARCHAR(50),
                     change_rate FLOAT,
-                    date_value DATE,
+                    date_value DATE PRIMARY KEY,  -- 날짜를 PK로 사용
                     signal VARCHAR(50)
                 );
 
@@ -100,18 +104,28 @@ class FearGreedCollector:
 
         change_rate = ((latest_value - previous_value) / previous_value) * 100 if previous else 0
 
-        # 날짜 형식 변환
-        timestamp_ms = int(latest['timestamp']) * 1000
-        date_value = datetime.fromtimestamp(int(latest['timestamp'])).date()
-
-        # 감정 카테고리에 따른 신호 생성
+        # Alternative.me에서 제공하는 감정 카테고리 그대로 사용
         sentiment = latest['value_classification']
-        signal = self.get_signal_from_sentiment(sentiment)
+
+        # 감정 카테고리에 따른 신호 매핑
+        signal = self.sentiment_signals.get(sentiment, "neutral")
+
+        # UTC 타임스탬프
+        timestamp_ms = int(latest['timestamp']) * 1000
+
+        # 한국 시간으로 변환 (로깅용)
+        kst_dt = datetime.fromtimestamp(
+            int(latest['timestamp']),
+            tz=pytz.timezone('Asia/Seoul')
+        )
+        date_value = kst_dt.date()
+
+        self.logger.info(f"수집된 Fear & Greed 지수: {latest_value} ({sentiment}), 날짜(KST): {date_value.isoformat()}")
 
         return {
             "timestamp_ms": timestamp_ms,
             "fear_greed_index": latest_value,
-            "sentiment_category": sentiment,
+            "sentiment_category": sentiment,  # Alternative.me 제공 카테고리
             "change_rate": round(change_rate, 2),
             "date_value": date_value.isoformat(),
             "signal": signal
@@ -196,11 +210,11 @@ class FearGreedCollector:
                 INSERT INTO fear_greed_index 
                 (timestamp_ms, fear_greed_index, sentiment_category, change_rate, date_value, signal)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (timestamp_ms) DO UPDATE SET
+                ON CONFLICT (date_value) DO UPDATE SET
                     fear_greed_index = EXCLUDED.fear_greed_index,
                     sentiment_category = EXCLUDED.sentiment_category,
                     change_rate = EXCLUDED.change_rate,
-                    date_value = EXCLUDED.date_value,
+                    timestamp_ms = EXCLUDED.timestamp_ms,
                     signal = EXCLUDED.signal;
                 """,
                 (
@@ -208,12 +222,13 @@ class FearGreedCollector:
                     data['fear_greed_index'],
                     data['sentiment_category'],
                     data.get('change_rate', 0),
-                    data['date_value'],
+                    data['date_value'],  # 날짜를 기준으로 유니크 제약
                     data['signal']
                 )
             )
             self.db_conn.commit()
-            self.logger.info(f"Fear & Greed 데이터가 PostgreSQL에 저장됨: {data['fear_greed_index']}")
+            self.logger.info(
+                f"Fear & Greed 데이터가 PostgreSQL에 저장됨: {data['sentiment_category']} ({data['fear_greed_index']})")
         except Exception as e:
             self.db_conn.rollback()
             self.logger.error(f"PostgreSQL 저장 중 오류 발생: {e}")

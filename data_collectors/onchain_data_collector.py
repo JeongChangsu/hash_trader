@@ -6,26 +6,34 @@
 Exchange Reserve, Exchange Netflow, SOPR, MVRV Ratio 등
 주요 온체인 지표를 수집하고 분석합니다.
 수집된 데이터는 Redis 및 PostgreSQL에 저장됩니다.
+
+한국 시간(KST) 기준으로 데이터를 수집하고 저장합니다.
 """
 
-import asyncio
 import time
 import json
+import pytz
 import logging
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Any, Optional, Tuple
-import redis.asyncio as redis
+import asyncio
 import psycopg2
+
+import numpy as np
+import pandas as pd
+import redis.asyncio as redis
 import undetected_chromedriver as uc
+
+from datetime import datetime, timedelta
 from selenium.webdriver.common.by import By
+from typing import Dict, List, Any, Optional, Tuple
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from datetime import datetime, timedelta
 
-from config.settings import REDIS_CONFIG, POSTGRES_CONFIG, KEY_ONCHAIN_METRICS
 from config.logging_config import configure_logging
+from config.settings import REDIS_CONFIG, POSTGRES_CONFIG, KEY_ONCHAIN_METRICS
+
+# 한국 시간대 설정
+KST = pytz.timezone('Asia/Seoul')
 
 
 class OnChainDataCollector:
@@ -131,28 +139,36 @@ class OnChainDataCollector:
                 CREATE TABLE IF NOT EXISTS onchain_data (
                     id SERIAL PRIMARY KEY,
                     timestamp_ms BIGINT NOT NULL,
+                    collection_id VARCHAR(15) NOT NULL,  -- 날짜_시간 형식 (YYYYMMDD_HH)
                     data JSONB NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (timestamp_ms)
+                    UNIQUE (collection_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS onchain_metrics (
                     id SERIAL PRIMARY KEY,
                     timestamp_ms BIGINT NOT NULL,
+                    collection_id VARCHAR(15) NOT NULL,  -- 날짜_시간 형식 (YYYYMMDD_HH)
                     metric_name VARCHAR(100) NOT NULL,
                     metric_value NUMERIC NOT NULL,
                     change_24h NUMERIC,
                     signal VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (timestamp_ms) REFERENCES onchain_data(timestamp_ms),
-                    UNIQUE (timestamp_ms, metric_name)
+                    FOREIGN KEY (collection_id) REFERENCES onchain_data(collection_id) ON DELETE CASCADE,
+                    UNIQUE (collection_id, metric_name)
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_onchain_data_collection_id 
+                ON onchain_data(collection_id);
 
                 CREATE INDEX IF NOT EXISTS idx_onchain_metrics_timestamp 
                 ON onchain_metrics(timestamp_ms);
 
                 CREATE INDEX IF NOT EXISTS idx_onchain_metrics_name 
                 ON onchain_metrics(metric_name);
+
+                CREATE INDEX IF NOT EXISTS idx_onchain_metrics_collection_id 
+                ON onchain_metrics(collection_id);
             """)
             self.db_conn.commit()
             self.logger.info("온체인 데이터 테이블 초기화됨")
@@ -161,6 +177,35 @@ class OnChainDataCollector:
             self.logger.error(f"테이블 초기화 중 오류 발생: {e}")
         finally:
             cursor.close()
+
+    def generate_collection_id(self) -> str:
+        """
+        수집 ID를 생성합니다. 날짜_시간 형식 (YYYYMMDD_HH)으로,
+        시간은 9시, 17시, 1시 중 가장 가까운 시간대로 고정됩니다.
+
+        Returns:
+            str: 수집 ID
+        """
+        # 현재 한국 시간
+        now = datetime.now(KST)
+
+        # 시간대 결정 (9시, 17시, 1시 중 가장 가까운 시간)
+        hour = now.hour
+
+        if 1 <= hour < 13:
+            target_hour = 9  # 오전 9시 (한국 시간)
+        elif 13 <= hour < 21:
+            target_hour = 17  # 오후 5시 (한국 시간)
+        else:  # 21 <= hour < 24 또는 hour = 0
+            target_hour = 1  # 오전 1시 (한국 시간)
+            # 1시의 경우 자정 이후인지 확인
+            if hour >= 21:
+                now = now + timedelta(days=1)
+
+        # YYYYMMDD_HH 형식으로 ID 생성
+        collection_id = now.strftime('%Y%m%d') + f'_{target_hour:02d}'
+
+        return collection_id
 
     def round_numeric(self, value: str) -> float:
         """
@@ -195,7 +240,8 @@ class OnChainDataCollector:
         Returns:
             Dict: 수집된 지표 데이터
         """
-        self.logger.info(f"URL에서 데이터 가져오는 중: {url}")
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        self.logger.info(f"URL에서 데이터 가져오는 중: {url} (KST: {now_kst})")
 
         driver.get(url)
         await asyncio.sleep(5)  # 페이지 로딩 대기
@@ -379,7 +425,8 @@ class OnChainDataCollector:
         Returns:
             Dict: 수집된 모든 온체인 데이터
         """
-        self.logger.info("온체인 데이터 수집 시작")
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        self.logger.info(f"온체인 데이터 수집 시작 (KST: {now_kst})")
 
         # Chrome 옵션 설정
         options = Options()
@@ -437,7 +484,7 @@ class OnChainDataCollector:
             if driver:
                 driver.quit()
 
-    async def save_results(self, data: Dict[str, Dict[str, Any]]) -> int:
+    async def save_results(self, data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
         수집된 온체인 데이터를 저장합니다.
 
@@ -445,10 +492,25 @@ class OnChainDataCollector:
             data: 저장할 온체인 데이터
 
         Returns:
-            int: 타임스탬프
+            Dict: 저장된 결과 정보
         """
+        # 타임스탬프 및 collection_id 생성
         timestamp_ms = int(time.time() * 1000)
-        data_with_timestamp = {"timestamp_ms": timestamp_ms, "data": data}
+        collection_id = self.generate_collection_id()
+
+        # 한국 시간 정보
+        now_kst = datetime.now(KST)
+        kst_date = now_kst.strftime("%Y-%m-%d")
+        kst_time = now_kst.strftime("%H:%M:%S")
+
+        # 데이터에 시간 정보 추가
+        data_with_timestamp = {
+            "timestamp_ms": timestamp_ms,
+            "collection_id": collection_id,
+            "kst_date": kst_date,
+            "kst_time": kst_time,
+            "data": data
+        }
 
         # Redis 연결
         redis_client = await redis.Redis(**self.redis_params)
@@ -468,7 +530,7 @@ class OnChainDataCollector:
                 json.dumps(data_with_timestamp, default=str)
             )
 
-            self.logger.info("온체인 데이터가 Redis에 저장됨")
+            self.logger.info(f"온체인 데이터가 Redis에 저장됨 (Collection ID: {collection_id})")
 
         except Exception as e:
             self.logger.error(f"Redis 저장 중 오류 발생: {e}")
@@ -482,26 +544,38 @@ class OnChainDataCollector:
             # 메인 온체인 데이터
             cursor.execute(
                 """
-                INSERT INTO onchain_data (timestamp_ms, data)
-                VALUES (%s, %s)
-                ON CONFLICT (timestamp_ms) DO UPDATE SET
+                INSERT INTO onchain_data (timestamp_ms, collection_id, data)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (collection_id) DO UPDATE SET
                     data = EXCLUDED.data,
+                    timestamp_ms = EXCLUDED.timestamp_ms,
                     created_at = CURRENT_TIMESTAMP
                 RETURNING id;
                 """,
-                (timestamp_ms, json.dumps(data_with_timestamp))
+                (timestamp_ms, collection_id, json.dumps(data_with_timestamp))
             )
+
+            # 기존 지표 삭제 (같은 collection_id에 해당하는)
+            cursor.execute(
+                """
+                DELETE FROM onchain_metrics
+                WHERE collection_id = %s
+                """,
+                (collection_id,)
+            )
+            self.db_conn.commit()
 
             # 개별 지표 저장
             for metric_name, metric_data in data.items():
                 cursor.execute(
                     """
                     INSERT INTO onchain_metrics 
-                    (timestamp_ms, metric_name, metric_value, change_24h, signal)
-                    VALUES (%s, %s, %s, %s, %s);
+                    (timestamp_ms, collection_id, metric_name, metric_value, change_24h, signal)
+                    VALUES (%s, %s, %s, %s, %s, %s);
                     """,
                     (
                         timestamp_ms,
+                        collection_id,
                         metric_name,
                         metric_data.get('latest_value', 0),
                         metric_data.get('24h_change', 0),
@@ -510,7 +584,7 @@ class OnChainDataCollector:
                 )
 
             self.db_conn.commit()
-            self.logger.info("온체인 데이터가 PostgreSQL에 저장됨")
+            self.logger.info(f"온체인 데이터가 PostgreSQL에 저장됨 (Collection ID: {collection_id})")
 
         except Exception as e:
             self.db_conn.rollback()
@@ -519,7 +593,12 @@ class OnChainDataCollector:
         finally:
             cursor.close()
 
-        return timestamp_ms
+        return {
+            "timestamp_ms": timestamp_ms,
+            "collection_id": collection_id,
+            "kst_date": kst_date,
+            "kst_time": kst_time
+        }
 
     def analyze_market_situation(self, data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -531,7 +610,8 @@ class OnChainDataCollector:
         Returns:
             Dict: 시장 상황 분석 결과
         """
-        self.logger.info("온체인 데이터 기반 시장 상황 분석 중")
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        self.logger.info(f"온체인 데이터 기반 시장 상황 분석 중 (KST: {now_kst})")
 
         # 신호 계수
         signal_counts = {
@@ -624,8 +704,15 @@ class OnChainDataCollector:
         strong_bearish_signals = [metric for metric, data in data.items()
                                   if data.get('signal') in ['very_bearish', 'bearish']]
 
+        # 한국 시간 정보 추가
+        collection_id = self.generate_collection_id()
+        now_kst = datetime.now(KST)
+
         return {
             "timestamp_ms": int(time.time() * 1000),
+            "collection_id": collection_id,
+            "kst_date": now_kst.strftime("%Y-%m-%d"),
+            "kst_time": now_kst.strftime("%H:%M:%S"),
             "overall_score": round(overall_score, 2),
             "market_sentiment": market_sentiment,
             "uncertainty_level": uncertainty_level,
@@ -641,14 +728,21 @@ class OnChainDataCollector:
         Returns:
             Dict: 수집 및 분석 결과
         """
-        self.logger.info("온체인 데이터 수집 및 분석 시작")
+        # 한국 시간으로 현재 시간 기록
+        now_kst = datetime.now(KST)
+        collection_id = self.generate_collection_id()
 
         result = {
             "success": False,
-            "timestamp": datetime.now().isoformat()
+            "timestamp_ms": int(time.time() * 1000),
+            "kst_time": now_kst.strftime("%Y-%m-%d %H:%M:%S"),
+            "kst_date": now_kst.strftime("%Y-%m-%d"),
+            "collection_id": collection_id
         }
 
         try:
+            self.logger.info(f"온체인 데이터 수집 및 분석 시작 (KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')})")
+
             # 데이터 수집
             data = await self.gather_all_data()
 
@@ -656,7 +750,7 @@ class OnChainDataCollector:
                 raise Exception("수집된 온체인 데이터가 없습니다")
 
             # 데이터 저장
-            timestamp_ms = await self.save_results(data)
+            storage_info = await self.save_results(data)
 
             # 시장 상황 분석
             market_analysis = self.analyze_market_situation(data)
@@ -664,12 +758,13 @@ class OnChainDataCollector:
             # 결과에 데이터 추가
             result.update({
                 "success": True,
-                "timestamp_ms": timestamp_ms,
+                "storage_info": storage_info,
                 "data": data,
                 "market_analysis": market_analysis
             })
 
-            self.logger.info(f"온체인 데이터 수집 및 분석 완료: {market_analysis['market_sentiment']}")
+            self.logger.info(
+                f"온체인 데이터 수집 및 분석 완료 (Collection ID: {collection_id}): {market_analysis['market_sentiment']}")
 
         except Exception as e:
             self.logger.error(f"온체인 데이터 수집 및 분석 중 오류 발생: {e}")
@@ -694,7 +789,8 @@ if __name__ == "__main__":
         result = loop.run_until_complete(collector.run())
 
         if result["success"]:
-            print(f"수집 완료. 지표 수: {len(result['data'])}")
+            print(f"수집 완료. Collection ID: {result['collection_id']}")
+            print(f"지표 수: {len(result['data'])}")
             print(f"시장 분위기: {result['market_analysis']['market_sentiment']}")
             print(f"전체 점수: {result['market_analysis']['overall_score']}")
         else:

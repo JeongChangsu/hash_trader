@@ -6,25 +6,30 @@
 Coinglass에서 히트맵 이미지를 다운로드하고 Gemini API를 사용하여
 지지/저항 레벨과 청산 클러스터를 파악합니다.
 분석 결과를 기반으로 TP/SL 설정에 대한 추천을 제공합니다.
+
+한국 시간(KST) 기준으로 데이터를 수집하고 저장합니다.
 """
 
-import asyncio
 import os
+import re
 import time
 import json
-import re
+import pytz
+import asyncio
 import logging
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
-import redis.asyncio as redis
 import psycopg2
+
+import pandas as pd
+import redis.asyncio as redis
+
+from PIL import Image
+from google import genai
 from selenium import webdriver
+from datetime import datetime, timedelta
 from selenium.webdriver.common.by import By
+from typing import Dict, List, Any, Optional, Tuple
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from google import genai
-from PIL import Image
-import pandas as pd
 
 from config.settings import (
     GEMINI_API_KEY,
@@ -33,6 +38,9 @@ from config.settings import (
     POSTGRES_CONFIG
 )
 from config.logging_config import configure_logging
+
+# 한국 시간대 설정
+KST = pytz.timezone('Asia/Seoul')
 
 
 class LiquidationAnalyzer:
@@ -70,24 +78,29 @@ class LiquidationAnalyzer:
                 CREATE TABLE IF NOT EXISTS liquidation_heatmap (
                     id SERIAL PRIMARY KEY,
                     timestamp_ms BIGINT NOT NULL,
+                    collection_id VARCHAR(15) NOT NULL,  -- 날짜_시간 형식 (YYYYMMDD_HH)
                     data JSONB NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (timestamp_ms)
+                    UNIQUE (collection_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS liquidation_clusters (
                     id SERIAL PRIMARY KEY,
                     timestamp_ms BIGINT NOT NULL,
+                    collection_id VARCHAR(15) NOT NULL,  -- 날짜_시간 형식 (YYYYMMDD_HH)
                     price_low NUMERIC NOT NULL,
                     price_high NUMERIC NOT NULL,
                     cluster_type VARCHAR(20) NOT NULL,
                     intensity VARCHAR(20) NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (timestamp_ms) REFERENCES liquidation_heatmap(timestamp_ms)
+                    FOREIGN KEY (collection_id) REFERENCES liquidation_heatmap(collection_id) ON DELETE CASCADE
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_liquidation_clusters_timestamp 
-                ON liquidation_clusters(timestamp_ms);
+                CREATE INDEX IF NOT EXISTS idx_liquidation_heatmap_collection_id 
+                ON liquidation_heatmap(collection_id);
+
+                CREATE INDEX IF NOT EXISTS idx_liquidation_clusters_collection_id 
+                ON liquidation_clusters(collection_id);
 
                 CREATE INDEX IF NOT EXISTS idx_liquidation_clusters_price_range 
                 ON liquidation_clusters(price_low, price_high);
@@ -119,7 +132,8 @@ class LiquidationAnalyzer:
                 prefs = {"download.default_directory": self.heatmaps_dir}
                 options.add_experimental_option("prefs", prefs)
 
-                self.logger.info(f"청산 히트맵 다운로드 시도 중 ({attempt}/{max_attempts})")
+                now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+                self.logger.info(f"청산 히트맵 다운로드 시도 중 ({attempt}/{max_attempts}) (KST: {now_kst})")
 
                 driver = webdriver.Chrome(options=options)
                 driver.get(self.heatmap_url)
@@ -179,7 +193,8 @@ class LiquidationAnalyzer:
         Returns:
             str: 분석 결과 텍스트
         """
-        self.logger.info(f"Gemini API로 청산 히트맵 분석 중: {image_path}")
+        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        self.logger.info(f"Gemini API로 청산 히트맵 분석 중: {image_path} (KST: {now_kst})")
 
         prompt = '''Analyze the attached Bitcoin liquidation heatmap image for the past 24 hours.
 Identify clearly defined liquidation clusters with precise price ranges (e.g., '41850–42000'), cluster type ('support' or 'resistance'), and intensity ('low', 'medium', 'high').
@@ -354,6 +369,37 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
 
         return result
 
+    def generate_collection_id(self) -> str:
+        """
+        수집 ID를 생성합니다. 날짜_시간 형식 (YYYYMMDD_HH)으로,
+        시간은 8시, 16시, 0시 중 가장 가까운 시간대로 고정됩니다.
+
+        Returns:
+            str: 수집 ID
+        """
+        # 현재 한국 시간
+        now = datetime.now(KST)
+
+        # 시간대 결정 (8시, 16시, 0시 중 가장 가까운 시간)
+        hour = now.hour
+
+        if 0 <= hour < 4:
+            target_hour = 0
+        elif 4 <= hour < 12:
+            target_hour = 8
+        elif 12 <= hour < 20:
+            target_hour = 16
+        else:  # 20 <= hour < 24
+            target_hour = 0
+            # 0시의 경우 다음 날 0시를 의미
+            if hour >= 20:
+                now = now + timedelta(days=1)
+
+        # YYYYMMDD_HH 형식으로 ID 생성
+        collection_id = now.strftime('%Y%m%d') + f'_{target_hour:02d}'
+
+        return collection_id
+
     async def save_results(self, data: Dict[str, Any]) -> None:
         """
         분석 결과를 Redis 및 PostgreSQL에 저장합니다.
@@ -361,6 +407,15 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
         Args:
             data: 저장할 분석 결과
         """
+        # 한국 시간 기반 collection_id 생성
+        collection_id = self.generate_collection_id()
+
+        # KST 시간 추가
+        now = datetime.now(KST)
+        data["kst_time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        data["kst_date"] = now.strftime("%Y-%m-%d")
+        data["collection_id"] = collection_id
+
         # Redis 연결
         redis_client = await redis.Redis(**self.redis_params)
 
@@ -379,7 +434,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 json.dumps(data, default=str)
             )
 
-            self.logger.info("분석 결과가 Redis에 저장됨")
+            self.logger.info(f"분석 결과가 Redis에 저장됨 (Collection ID: {collection_id})")
 
         except Exception as e:
             self.logger.error(f"Redis 저장 중 오류 발생: {e}")
@@ -393,14 +448,25 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
             # 메인 히트맵 데이터
             cursor.execute(
                 """
-                INSERT INTO liquidation_heatmap (timestamp_ms, data)
-                VALUES (%s, %s)
-                ON CONFLICT (timestamp_ms) DO UPDATE SET
+                INSERT INTO liquidation_heatmap (timestamp_ms, collection_id, data)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (collection_id) DO UPDATE SET
                     data = EXCLUDED.data,
+                    timestamp_ms = EXCLUDED.timestamp_ms,
                     created_at = CURRENT_TIMESTAMP
                 RETURNING id;
                 """,
-                (data['timestamp_ms'], json.dumps(data))
+                (data['timestamp_ms'], collection_id, json.dumps(data))
+            )
+            self.db_conn.commit()
+
+            # 기존 클러스터 삭제 (같은 collection_id에 해당하는)
+            cursor.execute(
+                """
+                DELETE FROM liquidation_clusters
+                WHERE collection_id = %s
+                """,
+                (collection_id,)
             )
             self.db_conn.commit()
 
@@ -409,11 +475,12 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 cursor.execute(
                     """
                     INSERT INTO liquidation_clusters 
-                    (timestamp_ms, price_low, price_high, cluster_type, intensity)
-                    VALUES (%s, %s, %s, %s, %s);
+                    (timestamp_ms, collection_id, price_low, price_high, cluster_type, intensity)
+                    VALUES (%s, %s, %s, %s, %s, %s);
                     """,
                     (
                         data['timestamp_ms'],
+                        collection_id,
                         cluster.get('price_low'),
                         cluster.get('price_high'),
                         cluster.get('type'),
@@ -422,7 +489,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 )
 
             self.db_conn.commit()
-            self.logger.info("분석 결과가 PostgreSQL에 저장됨")
+            self.logger.info(f"분석 결과가 PostgreSQL에 저장됨 (Collection ID: {collection_id})")
 
         except Exception as e:
             self.db_conn.rollback()
@@ -479,6 +546,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 """
                 SELECT 
                     lc.timestamp_ms, 
+                    lc.collection_id,
                     lc.price_low, 
                     lc.price_high, 
                     lc.cluster_type, 
@@ -487,7 +555,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 FROM 
                     liquidation_clusters lc
                 JOIN 
-                    liquidation_heatmap lh ON lc.timestamp_ms = lh.timestamp_ms
+                    liquidation_heatmap lh ON lc.collection_id = lh.collection_id
                 WHERE 
                     lh.created_at >= NOW() - INTERVAL '%s DAY'
                 ORDER BY 
@@ -568,14 +636,19 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
         Returns:
             Dict: 분석 결과
         """
+        # 한국 시간으로 현재 시간 기록
+        now_kst = datetime.now(KST)
+
         result = {
             "success": False,
             "timestamp_ms": int(time.time() * 1000),
-            "date": datetime.now().isoformat()
+            "kst_time": now_kst.strftime("%Y-%m-%d %H:%M:%S"),
+            "kst_date": now_kst.strftime("%Y-%m-%d"),
+            "collection_id": self.generate_collection_id()
         }
 
         try:
-            self.logger.info("청산 히트맵 분석 시작")
+            self.logger.info(f"청산 히트맵 분석 시작 (KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S')})")
 
             # 히트맵 이미지 다운로드
             image_path = self.download_heatmap_image()
@@ -585,6 +658,11 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
             # Gemini API로 분석
             analysis_text = self.analyze_heatmap_with_gemini(image_path)
             analysis_result = self.parse_analysis_result(analysis_text)
+
+            # 한국 시간 정보 추가
+            analysis_result["kst_time"] = now_kst.strftime("%Y-%m-%d %H:%M:%S")
+            analysis_result["kst_date"] = now_kst.strftime("%Y-%m-%d")
+            analysis_result["collection_id"] = result["collection_id"]
 
             # 현재 가격 조회
             current_price = None
@@ -615,7 +693,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 "data": analysis_result
             })
 
-            self.logger.info("청산 히트맵 분석 완료")
+            self.logger.info(f"청산 히트맵 분석 완료 (Collection ID: {result['collection_id']})")
 
         except Exception as e:
             self.logger.error(f"청산 히트맵 분석 중 오류 발생: {e}")
@@ -640,7 +718,8 @@ if __name__ == "__main__":
         result = loop.run_until_complete(analyzer.run())
 
         if result["success"]:
-            print(f"분석 완료. 클러스터 수: {len(result['data'].get('clusters', []))}")
+            print(f"분석 완료. Collection ID: {result['collection_id']}")
+            print(f"클러스터 수: {len(result['data'].get('clusters', []))}")
             print(f"실행 가능한 통찰: {result['data'].get('actionable_insight')}")
         else:
             print(f"분석 실패: {result.get('error', '알 수 없는 오류')}")

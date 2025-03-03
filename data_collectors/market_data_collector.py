@@ -7,17 +7,21 @@
 수집된 데이터는 Redis 및 PostgreSQL에 저장됩니다.
 """
 
-import asyncio
 import time
-from typing import Dict, List, Optional, Tuple, Union, Any
-import logging
 import json
+import pytz
+import logging
+import asyncio
+import psycopg2
+
 import numpy as np
 import pandas as pd
 import ccxt.pro as ccxtpro
 import redis.asyncio as redis
-import psycopg2
+
+from datetime import datetime
 from psycopg2.extras import Json
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 
 class MarketDataCollector:
@@ -225,6 +229,16 @@ class MarketDataCollector:
                 df = pd.DataFrame(
                     ohlcv,
                     columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                )
+
+                # 로깅 시 한국 시간 표시
+                latest_candle = df.iloc[-1]
+                utc_time = datetime.fromtimestamp(latest_candle['timestamp'].timestamp())
+                kst_time = utc_time.replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Seoul'))
+
+                self.logger.info(
+                    f"{symbol} {timeframe} 캔들 {len(df)}개 수집 완료. "
+                    f"최신 캔들 시간(KST): {kst_time.strftime('%Y-%m-%d %H:%M:%S')}"
                 )
 
                 # 타임스탬프를 datetime으로 변환
