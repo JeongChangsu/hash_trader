@@ -911,7 +911,7 @@ class MultiTimeframeAnalyzer:
                 (
                     symbol,
                     timestamp_ms,
-                    results.get('timeframe_coherence', 0),
+                    float(results.get('timeframe_coherence', 0)),  # 명시적으로 float로 변환
                     results.get('dominant_trend', 'neutral'),
                     json.dumps(results.get('htf_signals', {})),
                     json.dumps(results.get('ltf_signals', {})),

@@ -152,9 +152,16 @@ class MarketConditionClassifier:
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
             )
 
-            # 타임스탬프를 datetime으로 변환 및 오름차순 정렬
+            # 모든 가격 관련 컬럼을 명시적으로 numeric 타입으로 강제 변환
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+            df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+
+            # NaN 값 제거 (매우 중요)
+            df = df.dropna(subset=numeric_cols)
+
+            # 타임스탬프 변환 및 정렬
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df = df.sort_values('timestamp')
+            df = df.sort_values('timestamp').reset_index(drop=True)
 
             # 가격 변화율 계산
             df['returns'] = df['close'].pct_change()
@@ -839,8 +846,8 @@ class MarketConditionClassifier:
                 """
                 INSERT INTO market_conditions 
                 (symbol, timestamp_ms, primary_condition, secondary_condition, market_phase,
-                volatility_level, trend_strength, recommended_strategies,
-                classification_confidence, data_sources)
+                 volatility_level, trend_strength, recommended_strategies,
+                 classification_confidence, data_sources)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (symbol, timestamp_ms) 
                 DO UPDATE SET
@@ -860,10 +867,10 @@ class MarketConditionClassifier:
                     results.get('primary_condition', 'unknown'),
                     results.get('secondary_condition', 'unknown'),
                     results.get('market_phase', 'unknown'),
-                    results.get('volatility', {}).get('score', 0),
-                    results.get('trend', {}).get('strength', 0),
+                    float(results.get('volatility', {}).get('score', 0)),  # 여기 수정
+                    float(results.get('trend', {}).get('strength', 0)),  # 여기 수정
                     json.dumps(results.get('recommended_strategies', [])),
-                    results.get('confidence', 0),
+                    float(results.get('confidence', 0)),  # 여기 수정
                     json.dumps(results.get('data_sources', {}))
                 )
             )

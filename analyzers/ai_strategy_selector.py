@@ -271,7 +271,7 @@ class AIStrategySelector:
             patterns = []
             for row in cursor.fetchall():
                 try:
-                    pattern_data = json.loads(row[2])
+                    pattern_data = row[2] if isinstance(row[2], dict) else json.loads(row[2])
                     patterns.append({
                         'timeframe': row[0],
                         'pattern_type': row[1],
@@ -715,6 +715,14 @@ class AIStrategySelector:
             if onchain_data and onchain_data.get("market_analysis", {}).get("market_sentiment"):
                 data_summary["onchain_sentiment"] = onchain_data.get("market_analysis", {}).get("market_sentiment")
 
+            coherence_raw = data_summary['mtf_analysis'].get('coherence', 0)
+
+            # 안전한 float 변환 및 포매팅
+            try:
+                coherence_float = float(coherence_raw)
+            except (ValueError, TypeError):
+                coherence_float = 0.0
+
             # AI 프롬프트 구성
             prompt = f"""
 You are an elite Bitcoin trading strategy analyst. Analyze the provided market data and recommend the optimal trading strategy for the current market conditions.
@@ -725,7 +733,7 @@ CURRENT MARKET DATA:
 - Secondary Market Condition: {market_condition.get('secondary_condition', 'unknown') if market_condition else 'unknown'}
 - Market Phase: {market_condition.get('market_phase', 'unknown') if market_condition else 'unknown'}
 - Dominant Trend (MTF Analysis): {data_summary['mtf_analysis']['dominant_trend']}
-- Timeframe Coherence: {data_summary['mtf_analysis']['coherence']:.2f}
+- Timeframe Coherence: {coherence_float:.2f}
 - Current Volatility Level: {market_condition.get('volatility', {}).get('level', 'unknown') if market_condition else 'unknown'}
 - Trend Strength: {market_condition.get('trend', {}).get('strength', 0) if market_condition else 0}
 - Fear & Greed Index: {fear_greed_data.get('fear_greed_index', 'N/A')} ({fear_greed_data.get('sentiment_category', 'N/A')})
@@ -751,7 +759,7 @@ REQUIREMENTS:
 5. Estimate a confidence score (0-100%) for your recommendation
 
 Respond with a JSON object in the following format:
-{
+{{
             "primary_strategy": string,
   "secondary_strategy": string,
   "confidence": float,
@@ -760,10 +768,10 @@ Respond with a JSON object in the following format:
   "tp_levels": [float, float, ...],
   "sl_level": float,
   "ranking": [
-    {"strategy": string, "score": float, "reasoning": string},
+    {{"strategy": string, "score": float, "reasoning": string}},
     ...
   ]
-}
+}}
 """
             # API를 통한 추천 가져오기
             api_response = None
@@ -774,6 +782,7 @@ Respond with a JSON object in the following format:
                         model="gemini-2.0-pro-exp-02-05",
                         contents=prompt
                     )
+                    self.logger.info(f"Gemini API 프롬프트:\n{prompt}")
                     api_response = model.text
                     self.logger.info("Gemini API 응답 받음")
                 except Exception as e:

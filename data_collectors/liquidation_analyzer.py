@@ -113,7 +113,6 @@ class LiquidationAnalyzer:
         for attempt in range(1, max_attempts + 1):
             try:
                 options = webdriver.ChromeOptions()
-                options.add_argument("--headless")
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
 
@@ -127,10 +126,6 @@ class LiquidationAnalyzer:
 
                 # 페이지 로딩 대기
                 wait = WebDriverWait(driver, 30)
-                wait.until(
-                    EC.presence_of_element_located((By.XPATH,
-                                                    '//div[contains(@class, "LiquidationHeatMap_titleContent")]'))
-                )
 
                 # 카메라 버튼 찾기 및 클릭
                 camera_buttons = wait.until(
@@ -494,7 +489,7 @@ If no notable clusters are identified, explicitly return: {"clusters": [], "acti
                 JOIN 
                     liquidation_heatmap lh ON lc.timestamp_ms = lh.timestamp_ms
                 WHERE 
-                    lh.created_at >= NOW() - INTERVAL %s DAY
+                    lh.created_at >= NOW() - INTERVAL '%s DAY'
                 ORDER BY 
                     lh.created_at DESC, lc.price_low ASC
                 """,

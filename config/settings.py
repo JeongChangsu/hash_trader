@@ -28,7 +28,6 @@ REDIS_CONFIG = {
     "host": os.getenv("REDIS_HOST", "localhost"),
     "port": int(os.getenv("REDIS_PORT", 6379)),
     "db": int(os.getenv("REDIS_DB", 0)),
-    "password": os.getenv("REDIS_PASSWORD", None),
     "decode_responses": True
 }
 
@@ -135,3 +134,7 @@ INITIAL_DEPLOYMENT = {
 
 # 시스템 상태 및 성능 모니터링 설정
 MONITOR_HEARTBEAT_INTERVAL = 300  # 시스템 상태 확인 주기 (5분)
+
+# 텔레그램 설정
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")

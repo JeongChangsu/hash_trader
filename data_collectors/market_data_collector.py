@@ -269,6 +269,25 @@ class MarketDataCollector:
 
         return result
 
+    async def fetch_ohlcv_history(self, symbol: str, timeframe: str, since: Optional[int] = None, limit: int = 1000):
+        """
+        과거 OHLCV 데이터를 수집하여 DB에 저장
+        """
+        try:
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+            df = pd.DataFrame(
+                ohlcv,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+            # DB에 저장
+            await self.save_ohlcv_to_postgres(symbol, timeframe, df)
+
+            self.logger.info(f"과거 OHLCV 데이터를 저장함 ({symbol}, {timeframe}, {len(df)}개)")
+        except Exception as e:
+            self.logger.error(f"OHLCV 과거 데이터 저장 중 오류 발생: {e}")
+
     async def save_ohlcv_to_postgres(
             self,
             symbol: str,

@@ -170,7 +170,13 @@ class ChartPatternAnalyzer:
             df = pd.DataFrame(
                 rows,
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            )
+            ).astype({
+                'open': float,
+                'high': float,
+                'low': float,
+                'close': float,
+                'volume': float
+            })
 
             # 타임스탬프를 datetime으로 변환 및 오름차순 정렬
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -1282,30 +1288,28 @@ class ChartPatternAnalyzer:
 
         return result
 
-    def save_analysis_results(
-            self,
-            symbol: str,
-            timeframe: str,
-            results: Dict[str, Any]
-    ) -> None:
-        """
-        분석 결과를 Redis 및 PostgreSQL에 저장합니다.
+    def save_analysis_results(self, symbol: str, timeframe: str, results: Dict[str, Any]) -> None:
+        # Redis 저장 전 Timestamp 변환 처리
+        def convert_timestamps(obj):
+            if isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            if isinstance(obj, dict):
+                return {k: convert_timestamps(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert_timestamps(elem) for elem in obj]
+            return obj
 
-        Args:
-            symbol: 심볼(예: 'BTC/USDT')
-            timeframe: 시간프레임(예: '1h')
-            results: 분석 결과
-        """
-        # Redis에 저장
+        # 결과 내 모든 Timestamp를 변환
+        results_serializable = convert_timestamps(results)
+
+        # Redis에 저장 (변환된 데이터 사용)
         redis_key = f"analysis:chart:{symbol.replace('/', '_')}:{timeframe}"
-        self.redis_client.set(redis_key, json.dumps(results))
+        self.redis_client.set(redis_key, json.dumps(results_serializable))
         self.redis_client.expire(redis_key, 86400)  # 1일 후 만료
 
-        # 패턴 저장
+        # PostgreSQL 저장 (변환된 데이터 사용)
         cursor = self.db_conn.cursor()
-
         try:
-            # 기존 패턴 삭제 (최신 결과만 유지)
             cursor.execute(
                 """
                 DELETE FROM chart_patterns
@@ -1315,8 +1319,7 @@ class ChartPatternAnalyzer:
                 (symbol, timeframe)
             )
 
-            # 새 패턴 추가
-            for pattern in results.get('patterns', []):
+            for pattern in results_serializable.get('patterns', []):
                 cursor.execute(
                     """
                     INSERT INTO chart_patterns
@@ -1326,16 +1329,16 @@ class ChartPatternAnalyzer:
                     (
                         symbol,
                         timeframe,
-                        pattern.get('pattern_type', 'unknown'),
-                        int(time.time() * 1000) - (pattern.get('end_idx', 0) - pattern.get('start_idx', 0)) * 60000,
+                        str(pattern.get('pattern_type', 'unknown')),
+                        int(time.time() * 1000) - int(pattern.get('end_idx', 0) - pattern.get('start_idx', 0)) * 60000,
                         int(time.time() * 1000),
                         json.dumps(pattern),
-                        pattern.get('confidence', 50)
+                        float(pattern.get('confidence', 50))
                     )
                 )
 
-            # 지지/저항 레벨 저장
-            for support in results.get('support_resistance', {}).get('support', []):
+            # 지지/저항 레벨 저장 시 타입 명시적 변환
+            for support in results_serializable.get('support_resistance', {}).get('support', []):
                 cursor.execute(
                     """
                     INSERT INTO support_resistance_levels
@@ -1346,15 +1349,15 @@ class ChartPatternAnalyzer:
                         symbol,
                         timeframe,
                         'support',
-                        support.get('price', 0),
-                        support.get('strength', 0),
-                        support.get('touch_count', 0),
-                        int(time.time() * 1000) - 86400000,  # 1일 전
-                        int(time.time() * 1000)
+                        float(support.get('price', 0)),
+                        float(support.get('strength', 0)),
+                        int(support.get('touch_count', 0)),
+                        int(pd.Timestamp(support.get('start_time')).timestamp() * 1000),
+                        int(pd.Timestamp(support.get('end_time')).timestamp() * 1000)
                     )
                 )
 
-            for resistance in results.get('support_resistance', {}).get('resistance', []):
+            for resistance in results_serializable.get('support_resistance', {}).get('resistance', []):
                 cursor.execute(
                     """
                     INSERT INTO support_resistance_levels
@@ -1365,11 +1368,11 @@ class ChartPatternAnalyzer:
                         symbol,
                         timeframe,
                         'resistance',
-                        resistance.get('price', 0),
-                        resistance.get('strength', 0),
-                        resistance.get('touch_count', 0),
-                        int(time.time() * 1000) - 86400000,  # 1일 전
-                        int(time.time() * 1000)
+                        float(resistance.get('price', 0)),
+                        float(resistance.get('strength', 0)),
+                        int(resistance.get('touch_count', 0)),
+                        int(pd.Timestamp(resistance.get('start_time')).timestamp() * 1000),
+                        int(pd.Timestamp(resistance.get('end_time')).timestamp() * 1000)
                     )
                 )
 

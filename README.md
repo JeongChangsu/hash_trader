@@ -4,13 +4,13 @@ hash_trader/
 ├── config/
 │   ├── settings.py             # 전역 설정
 │   ├── exchange_config.py      # 거래소 연결 설정
-│   ├── strategy_config.py      # 전략 파라미터 설정
 │   └── logging_config.py       # 로깅 설정
 │
 ├── data_collectors/
 │   ├── market_data_collector.py      # 시장 데이터 수집
 │   ├── onchain_data_collector.py     # 온체인 데이터 수집
 │   ├── liquidation_analyzer.py       # 청산 히트맵 분석
+│   ├── backfill_ohlcv.py             # ohlcv 과거 데이터 부족 시 수집
 │   └── fear_greed_collector.py       # 공포&탐욕 지수 수집
 │
 ├── analyzers/
@@ -37,21 +37,13 @@ hash_trader/
 │   └── postgres_handler.py           # PostgreSQL 인터페이스
 │
 ├── utils/
-│   ├── technical_indicators.py       # 기술적 지표 계산
-│   ├── visualization.py              # 데이터 시각화
-│   ├── backtest_utils.py             # 백테스팅 유틸리티
+│   ├── monitoring.py                 # 데이터 시각화(궁극적으로 UI 구현이 목표)
 │   └── notification.py               # 알림 시스템
 │
 ├── ai/
 │   ├── gemini_api.py                 # Gemini API 인터페이스
 │   ├── claude_api.py                 # Claude API 인터페이스
 │   └── prompt_templates.py           # AI 프롬프트 템플릿
-│
-├── tests/
-│   ├── test_collectors.py            # 수집기 테스트
-│   ├── test_analyzers.py             # 분석기 테스트
-│   ├── test_strategies.py            # 전략 테스트
-│   └── test_execution.py             # 실행 테스트
 │
 ├── scripts/
 │   ├── setup_database.py             # 데이터베이스 초기화
